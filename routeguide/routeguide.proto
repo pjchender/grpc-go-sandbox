@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+option go_package = "sandbox/grpc-go-sandbox/routeguide";
+package routeguide;
+
+
+service RouteGuide {
+  // A simple RPC
+
+  // A feature with an empty name is returned if there's no feature at the given position
+  rpc GetFeature(Point) returns (Feature) {}
+}
+
+message Point {
+  int32 latitude = 1;
+  int32 longitude = 2;
+}
+
+message Feature {
+  // the name of the feature
+  string name = 1;
+
+  // The point where the feature is detected
+  Point location = 2;
+}
