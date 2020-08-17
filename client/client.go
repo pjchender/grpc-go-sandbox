@@ -5,9 +5,23 @@ import (
 	"google.golang.org/grpc"
 	"log"
 	pb "sandbox/grpc-go-sandbox/routeguide"
+	"time"
 )
 
 var serverAddr = "localhost:3000"
+
+// printFeature gets the feature for the given point
+func printFeature(client pb.RouteGuideClient, point *pb.Point) {
+	log.Printf("Getting feature for point (%d, %d)", point.Latitude, point.Longitude)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	feature, err := client.GetFeature(ctx, point)
+	if err != nil {
+		log.Fatalf("%v.GetFeature(_) = _, %v: ", client, err)
+	}
+	log.Println(feature)
+}
 
 func main() {
 	// STEP 1：creating the client stub
@@ -15,7 +29,7 @@ func main() {
 	// 如果沒有使用安全連線的話，在 options 的地方要加上 grpc.WIthInsecure()
 	conn, err := grpc.Dial(serverAddr, grpc.WithInsecure())
 	if err != nil {
-		log.Fatalf("faild to dial: %v", err)
+		log.Fatalf("failed to dial: %v", err)
 	}
 	defer conn.Close()
 
@@ -23,11 +37,5 @@ func main() {
 	client := pb.NewRouteGuideClient(conn)
 
 	// STEP 2：呼叫 Service Methods
-	// 透過 context.Context 物件，讓我們在需要時可以改變 RPC 的行為，像是立即執行 time-out/cancel 一個 RPC
-	feature, err := client.GetFeature(context.Background(), &pb.Point{Latitude: 409146138, Longitude: -746188906})
-	if err != nil {
-		log.Fatalf("faild to getFeature")
-	}
-
-	log.Println(feature)
+	printFeature(client, &pb.Point{Latitude: 409146138, Longitude: -746188906})
 }
