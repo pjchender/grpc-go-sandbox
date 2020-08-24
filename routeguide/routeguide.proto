@@ -9,11 +9,23 @@ service RouteGuide {
 
   // A feature with an empty name is returned if there's no feature at the given position
   rpc GetFeature(Point) returns (Feature) {}
+
+  // A server-to-client streaming RPC
+  // 結果會以串流的方式回傳，而不是一次傳完
+  rpc ListFeatures(Rectangle) returns (stream Feature) {}
 }
 
+// 緯度（latitude）只會介於 +/- 90 度之間
+// 經度（longitude）則會介於 +/- 180 度之間
 message Point {
   int32 latitude = 1;
   int32 longitude = 2;
+}
+
+// 用 lo 和 hi 來代表長方形的兩個點
+message Rectangle {
+  Point lo = 1;
+  Point hi = 2;
 }
 
 message Feature {

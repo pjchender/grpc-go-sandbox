@@ -2,6 +2,15 @@
 
 > - [Basics Tutorial](https://grpc.io/docs/languages/go/basics/) @ gRPC.io
 > - [gRPC-go-sandbox](https://github.com/pjchender/grpc-go-sandbox) @ pjchender github
+> - [routeguide/server](https://github.com/grpc/grpc-go/blob/master/examples/route_guide/server/server.go) @ Github
+> - [routeguide/client](https://github.com/grpc/grpc-go/blob/master/examples/route_guide/client/client.go) @ Github
+
+## TL;DR;
+
+```bash
+# 根據 proto 產生 go 檔
+$ protoc -I routeguide/ routeguide/routeguide.proto --go_out=plugins=grpc:routeguide --go_opt=paths=source_relative
+```
 
 ## simple RPC
 
@@ -27,9 +36,23 @@ $ protoc -I routeguide/ routeguide/routeguide.proto --go_out=plugins=grpc:routeg
 ```
 
 在這個檔案中將會包含
+
 1. 用來自動產生（populate）、序列化（serialize）和取得 request / response message types 的 protocol buffer 程式碼
 2. 給 client 用來使用的 interface type（或稱 stub），以此呼叫定義在 RouteGuide service 中的方法
 3. 給 server 用來實作的 interface type
+
+```go
+type RouteGuideClient interface {
+	// A feature with an empty name is returned if there's no feature at the given position
+	GetFeature(ctx context.Context, in *Point, opts ...grpc.CallOption) (*Feature, error)
+}
+
+// RouteGuideServer is the server API for RouteGuide service.
+type RouteGuideServer interface {
+	// A feature with an empty name is returned if there's no feature at the given position
+	GetFeature(context.Context, *Point) (*Feature, error)
+}
+```
 
 ### 3. 建立 server
 
@@ -95,7 +118,7 @@ func main() {
 }
 ```
 
-### Creating the client
+### 4. 建立 client
 
 Client 要做得事情包含：
 
@@ -141,7 +164,129 @@ if err != nil {
 log.Println(feature)
 ```
 
+## Server-side streaming RPC
 
+在這個範例中 client 會給一個方形（rectangle），server 則會以 stream 的方式回傳所有在這個 rectangle 中的所有 features。
 
+### 1. 使用 proto 定義 service
 
+在 `service` 中多定義一個 `ListFeatures` 方法，並在 returns 的地方，加上 `stream` 關鍵字，即可讓 server 以串流的方式進行回傳：
+
+```protobuf
+// routeguide.proto
+
+service RouteGuide {
+  // A server-to-client streaming RPC
+  // 結果會以串流的方式回傳，而不是一次傳完
+  rpc ListFeatures(Rectangle) returns (stream Feature) {}
+}
+```
+
+### 2. 產生 client 和 server 的程式碼
+
+這個 protobuffer 的 service 在 build 成 go 的程式碼後，會是可以接收 `Rectangel` 和 `RouteGuide_ListFeaturesServer` 的 method，並且會回傳 error，client 端需要根據這個 error 判斷資料是否已經傳送完畢：
+
+- 當 `error` 為 `nil` 時，表示資料還沒傳完
+- 當 `error` 為 `io.EOF` 時，表示資料傳送完畢
+- 當 `error` 是其他內容時，表示有錯誤產生
+
+```go
+// RouteGuideServer is the server API for RouteGuide service.
+type RouteGuideServer interface {
+	// A server-to-client streaming RPC
+	// 結果會以串流的方式回傳，而不是一次傳完
+	ListFeatures(*Rectangle, RouteGuide_ListFeaturesServer) error
+}
+
+// RouteGuideClient is the client API for RouteGuide service.
+type RouteGuideClient interface {
+	ListFeatures(ctx context.Context, in *Rectangle, opts ...grpc.CallOption) (RouteGuide_ListFeaturesClient, error)
+}
+```
+
+### 3. 建立 server
+
+在 server 端會針對 ListFeatures 這個 method 進行實作：
+
+- 以 `stream.Send()` 的方式將資料以串流回傳
+
+```go
+// STEP 1：ListFeatures 會以 server-side stream 的方式將所有 features 回傳給 client
+func (s *routeGuideServer) ListFeatures(rect *pb.Rectangle, stream pb.RouteGuide_ListFeaturesServer) error {
+	// STEP 2：取出 savedFeatures 的資料並以 stream.Send() 的方式回傳
+	// Client 端需要從 err 判斷，如果還有資料未傳完，則 err 會是 nil；如果傳完了會是 io.EOF；否則會得到 err
+	for _, feature := range s.savedFeatures {
+		if inRange(feature.Location, rect) {
+			if err := stream.Send(feature); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+```
+
+### 4. 建立 Client
+
+在 client 端會使用 `client.ListFeatures` 這個方法來取得 server-side streaming 回傳的資料：
+
+- 以 `stream.Recv()` 來取得資料（recv 應該是 receive 的意思）
+
+#### 建立 service methods
+
+```go
+// STEP 1：撰寫 PrintFeatures 取得 server-side streaming gRPC 的資料
+func printFeatures(client pb.RouteGuideClient, rect *pb.Rectangle) {
+	log.Printf("Looking for feature with %v", rect)
+
+	// STEP 2：透過 context.WithTimeout 建立 timeout 機制，並取得 ctx
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// STEP 3：將 ctx 傳入 pb 提供的 ListFeatures 方法，可以得到 stream
+	stream, err := client.ListFeatures(ctx, rect)
+	if err != nil {
+		log.Fatalf("%v.ListFeatures(_) = _, %v", client, err)
+	}
+	
+	// STEP 4：透過 for loop 搭配 stream.Recv() 方法可以取得每次串流的資料
+	for {
+		feature, err := stream.Recv()
+
+		// STEP 4-1：io.EOF 表示資料讀完了
+		if err == io.EOF {
+			break
+		}
+
+		// STEP 4-2: error handling
+		if err != nil {
+			log.Fatalf("%v.ListFeatures(_) = _, %v", client, err)
+		}
+
+		// STEP 4-3: print feature
+		log.Println(feature)
+	}
+}
+```
+
+#### 執行該 method
+
+```go
+func main() {
+	conn, err := grpc.Dial(serverAddr, grpc.WithInsecure())
+	if err != nil {
+		log.Fatalf("failed to dial: %v", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewRouteGuideClient(conn)
+
+	// Server-side streaming RPC
+	// STEP 5: use print features function
+	printFeatures(client, &pb.Rectangle{
+		Lo: &pb.Point{Latitude: 400000000, Longitude: -750000000},
+		Hi: &pb.Point{Latitude: 420000000, Longitude: -730000000},
+	})
+}
+```
 
