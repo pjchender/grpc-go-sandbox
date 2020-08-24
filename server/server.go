@@ -2,22 +2,23 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	pb "sandbox/grpc-go-sandbox/routeguide"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"sandbox/grpc-go-sandbox/testdata"
 )
 
-// STEP 1-1：定義 routeGuideServer 的 struct
 type routeGuideServer struct {
 	pb.UnimplementedRouteGuideServer
 	savedFeatures []*pb.Feature
 }
 
-// STEP 1-2：根據 proto 中的 service 建立實作方式
 // 在 proto 中有定義這個 service 會接收 point 最為參數，並且會回傳 Feature
 func (s *routeGuideServer) GetFeature(ctx context.Context, point *pb.Point) (
 	*pb.Feature, error,
@@ -33,21 +34,44 @@ func (s *routeGuideServer) GetFeature(ctx context.Context, point *pb.Point) (
 	return &pb.Feature{Location: point}, nil
 }
 
+// STEP 1：定義 loadFeatures 會把 JSON 檔案中所列的 features 載入
+func (s *routeGuideServer) loadFeatures(filePath string) {
+	var data []byte
+
+	if filePath != "" {
+		var err error
+		data, err = ioutil.ReadFile(filePath)
+
+		if err != nil {
+			log.Fatalf("Failed to load default features: %v", err)
+		}
+	} else {
+		//data = exampleData
+		log.Fatalf("filePath is not exists")
+	}
+
+	// 將 bytes 轉成 struct
+	if err := json.Unmarshal(data, &s.savedFeatures); err != nil {
+		log.Fatalf("Failed to load default features: %v", err)
+	}
+}
+
 func main() {
-	// STEP 2-1：定義要監聽的 port 號
 	lis, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", 3000))
 	if err != nil {
 		log.Fatalf("failed to listed: %v", err)
 	}
 
-	// STEP 2-2：使用 gRPC 的 NewServer 方法來建立 gRPC Server 的實例
 	grpcServer := grpc.NewServer()
+	s := &routeGuideServer{}
 
-	// STEP 2-3：在 gRPC Server 中註冊 service 的實作
+	// STEP 2：把 route_guide_db.json 的資料載入
+	s.loadFeatures(testdata.Path("route_guide_db.json"))
+
 	// 使用 proto 提供的 RegisterRouteGuideServer 方法，並將 routeGuideServer 作為參數傳入
-	pb.RegisterRouteGuideServer(grpcServer, &routeGuideServer{})
+	// STEP 3：把 s 傳入 grpcServer
+	pb.RegisterRouteGuideServer(grpcServer, s)
 
-	// STEP 2-4：啟動 grpcServer，並阻塞在這裡直到該程序被 kill 或 stop
 	err = grpcServer.Serve(lis)
 	if err != nil {
 		log.Fatalf("failed to serve: %v", err)
