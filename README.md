@@ -1,18 +1,100 @@
-# GRPC-GO-Sandbox
+# gRPC-GO-Sandbox
 
 > - [Basics Tutorial](https://grpc.io/docs/languages/go/basics/) @ gRPC.io
-> - [gRPC-go-sandbox](https://github.com/pjchender/grpc-go-sandbox) @ pjchender github
+> - Sample Code: [gRPC-go-sandbox](https://github.com/pjchender/grpc-go-sandbox) @ pjchender github
+> - [grpc/grpc-go](https://github.com/grpc/grpc-go)
 > - [routeguide/server](https://github.com/grpc/grpc-go/blob/master/examples/route_guide/server/server.go) @ Github
 > - [routeguide/client](https://github.com/grpc/grpc-go/blob/master/examples/route_guide/client/client.go) @ Github
 
 ## TL;DR;
 
+當 protocol buffer 是要在 gRPC 使用的話，需要使用到 `grpc-go` 的套件：
+
+```bash
+$ go get -u google.golang.org/grpc
+```
+
+或者：
+
+```bash
+$ go get -u github.com/golang/protobuf/{proto,protoc-gen-go}
+$ go get -u google.golang.org/grpc
+```
+
+如此就可以使用 `--go_out=plugins=grpc` 的方式，透過 protocol buffer 產生支援 gRPC 的 `.pb.go` 檔：
+
 ```bash
 # 根據 proto 產生 go 檔
+$ protoc --go_out=plugins=grpc:. *.proto
+$ protoc -I routeguide/ routeguide/routeguide.proto --go_out=plugins=grpc:routeguide --go_opt=paths=source_relative
+```
+
+## 安裝
+
+### compiler
+
+```bash
+# 安裝 compiler
+$ brew install protobuf
+$ protoc --version  # Ensure compiler version is 3+
+```
+
+### protobuf
+
+```bash
+$ go get -u github.com/golang/protobuf/proto
+$ go get -u github.com/golang/protobuf/protoc-gen-go
+$ protoc-gen-go --version      # 檢視版本
+```
+
+### gRPC-go
+
+當 protocol buffer 是要搭配使用 gRPC 時，需要安裝 `gRPC-go` 的套件：
+
+```bash
+$ go get -u google.golang.org/grpc
+```
+
+如此才使用`--go_out=plugins=grpc` 的方式，透過 protocol buffer 產生支援 gRPC 的 `.pb.go` 檔。
+
+## Compile 成 pb.go 檔
+
+```bash
+# 根據 proto 產生 go 檔
+$ protoc --go_out=plugins=grpc:. *.proto
+
+# 產生編譯檔（產生一般的 .pb.go 檔，但沒有使用 gRPC plugin
+$ protoc -I=$SRC_DIR --go_out=$DST_DIR $SRC_DIR/addressbook.proto  # 預設根據 go_package 路徑
+
+# 編譯特定的 .proto 檔
+# --go_opt=paths=source_relative 表示要用相對路徑產生檔案，如果沒有寫的話，會將檔案根據 module path 建立在指定目錄中
+$ protoc --proto_path=src --go_out=build/gen --go_opt=paths=source_relative src/foo.proto src/bar/baz.proto
+```
+
+- 使用 `--go_out` 會產生由 `.proto` 編譯後的 `.go` 檔，原本的 `foo.proto` 會變成 `foo.pb.go`
+- 在 `.proto` 檔案中，要包含 `go_package` 的屬性，當中要指定包含 generated code 中程式碼的 full Go import path
+
+```go
+option go_package = "example.com/foo/bar";
+```
+
+- output 資料夾的檔案會根據 `go_package` 的屬性和 compiler flags 有不同
+  - 預設情況下，output 檔案會被放在與 `go_package` 屬性相同的資料夾名稱內
+  - 透過 `--go_opt=paths=source_relative` 則可以修改 output file 產生的位址
+
+- 如果需要打包成給 gRPC 使用的 GO 檔，需要使用 `--go_out=plugins=grpc:<path>`：
+
+```bash
+$ protoc -I grpc/smileinnstatus --go_out=plugins=grpc:grpc/smileinnstatus --go_opt=paths=source_relative grpc/smileinnstatus/smileInnStatus.proto
 $ protoc -I routeguide/ routeguide/routeguide.proto --go_out=plugins=grpc:routeguide --go_opt=paths=source_relative
 ```
 
 ## simple RPC
+
+> 範例程式碼：
+>
+> - [Create Simple RPC Example](https://github.com/pjchender/grpc-go-sandbox/commit/5def9e19b011c61e218439ff6f12b4166dc6d56e) @ Github
+> - [simple RPC example(client)](https://github.com/pjchender/grpc-go-sandbox/commit/e592d871100fb27cceafd6dc89bfc0d03435c07d) @ Github
 
 ### 1. 使用 proto 定義 service
 
@@ -168,6 +250,11 @@ log.Println(feature)
 
 在這個範例中 client 會給一個方形（rectangle），server 則會以 stream 的方式回傳所有在這個 rectangle 中的所有 features。
 
+> 範例程式碼：
+>
+> - [load features function](https://github.com/pjchender/grpc-go-sandbox/commit/0281aff5032564a6909fef7182591624f8cede94) @ Github
+> - [Create server-side streaming gRPC](https://github.com/pjchender/grpc-go-sandbox/commit/c5177d0875bd75f32720b1b9b478265413cf9b4c) @ Github
+
 ### 1. 使用 proto 定義 service
 
 在 `service` 中多定義一個 `ListFeatures` 方法，並在 returns 的地方，加上 `stream` 關鍵字，即可讓 server 以串流的方式進行回傳：
@@ -288,5 +375,25 @@ func main() {
 		Hi: &pb.Point{Latitude: 420000000, Longitude: -730000000},
 	})
 }
+```
+
+## Debugging
+
+> [Debugging](https://github.com/grpc/grpc-go/blob/master/examples/features/debugging/README.md) @ gPRC Github
+
+將環境變數設成：
+
+```bash
+GRPC_GO_LOG_VERBOSITY_LEVEL=99 
+GRPC_GO_LOG_SEVERITY_LEVEL=info
+```
+
+## 錯誤排除
+
+### protoc-gen-go: program not found or is not executable
+
+```bash
+# 需要把 $GOPATH/bin 加到 .zshrc/.bashrc 等
+$ echo 'export PATH=$PATH:$GOPATH/bin' >> $HOME/.zshrc
 ```
 
