@@ -13,6 +13,11 @@ service RouteGuide {
   // A server-to-client streaming RPC
   // 結果會以串流的方式回傳，而不是一次傳完
   rpc ListFeatures(Rectangle) returns (stream Feature) {}
+
+  // A client-to-server streaming RPC
+  //
+  // 以 stream 的方式接收許多 Points，當接收完畢後回傳 RouteSummary
+  rpc RecordRoute(stream Point) returns (RouteSummary) {}
 }
 
 // 緯度（latitude）只會介於 +/- 90 度之間
@@ -34,4 +39,18 @@ message Feature {
 
   // The point where the feature is detected
   Point location = 2;
+}
+
+message RouteSummary {
+  // 接收到的 points 數目
+  int32 point_count = 1;
+
+  // traversing route 時已知的 features 數目
+  int32 feature_count = 2;
+
+  // metres 涵蓋的範圍
+  int32 distance = 3;
+
+  // traversal 所花非的時間
+  int32 elapsed_time = 4;
 }

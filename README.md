@@ -1,4 +1,15 @@
-# gRPC-GO-Sandbox
+---
+id: note-grpc-go
+title: '[gRPC] gRPC-GO 筆記'
+date: 2020-06-30 10:10:10
+updated: 2020-06-30 10:10:10
+categories:
+  - rpc
+keywords:
+  - grpc
+---
+
+# gRPC-GO 筆記
 
 > - [Basics Tutorial](https://grpc.io/docs/languages/go/basics/) @ gRPC.io
 > - Sample Code: [gRPC-go-sandbox](https://github.com/pjchender/grpc-go-sandbox) @ pjchender github
@@ -79,6 +90,7 @@ option go_package = "example.com/foo/bar";
 ```
 
 - output 資料夾的檔案會根據 `go_package` 的屬性和 compiler flags 有不同
+
   - 預設情況下，output 檔案會被放在與 `go_package` 屬性相同的資料夾名稱內
   - 透過 `--go_opt=paths=source_relative` 則可以修改 output file 產生的位址
 
@@ -217,7 +229,7 @@ Client 要做得事情包含：
 // 如果沒有使用安全連線的話，在 options 的地方要加上 grpc.WIthInsecure()
 conn, err := grpc.Dial(serverAddr, grpc.WithInsecure())
 if err != nil {
-    log.Fatalf("faild to dial: %v", err)
+    log.Fatalf("failed to dial: %v", err)
 }
 defer conn.Close()
 ```
@@ -318,6 +330,9 @@ func (s *routeGuideServer) ListFeatures(rect *pb.Rectangle, stream pb.RouteGuide
 在 client 端會使用 `client.ListFeatures` 這個方法來取得 server-side streaming 回傳的資料：
 
 - 以 `stream.Recv()` 來取得資料（recv 應該是 receive 的意思）
+- 當 `error` 為 `nil` 時，表示資料還沒傳完
+- 當 `error` 為 `io.EOF` 時，表示資料傳送完畢
+- 當 `error` 是其他內容時，表示有錯誤產生
 
 #### 建立 service methods
 
@@ -335,7 +350,7 @@ func printFeatures(client pb.RouteGuideClient, rect *pb.Rectangle) {
 	if err != nil {
 		log.Fatalf("%v.ListFeatures(_) = _, %v", client, err)
 	}
-	
+
 	// STEP 4：透過 for loop 搭配 stream.Recv() 方法可以取得每次串流的資料
 	for {
 		feature, err := stream.Recv()
@@ -377,6 +392,180 @@ func main() {
 }
 ```
 
+## Client-side streaming RPC
+
+### 1. 使用 proto 定義 service
+
+- 定義一個名為 `RecordRoute` 的 service
+
+```protobuf
+//
+// A client-to-server streaming RPC
+service RouteGuide {
+  // 以 stream 的方式接收許多 Points，當接收完畢後回傳 RouteSummary
+  rpc RecordRoute(stream Point) returns (RouteSummary) {}
+}
+```
+
+### 2. 產生 client 和 server 的程式碼
+
+- 產生 `RouteSummary struct {}` 來回傳資料，其中包含了 `Reset()`, `String()`
+
+#### 產生 `RouteGuideServer` interface
+
+```go
+// RouteGuideServer is the server API for RouteGuide service.
+type RouteGuideServer interface {
+
+	// A client-to-server streaming RPC
+	// 以 stream 的方式接收許多 Points，當接收完畢後回傳 RouteSummary
+	RecordRoute(RouteGuide_RecordRouteServer) error
+}
+
+
+type RouteGuide_RecordRouteServer interface {
+	SendAndClose(*RouteSummary) error
+	Recv() (*Point, error)
+	grpc.ServerStream
+}
+
+type routeGuideRecordRouteServer struct {
+	grpc.ServerStream
+}
+func (x *routeGuideRecordRouteServer) SendAndClose(m *RouteSummary) error {/* ... */}
+func (x *routeGuideRecordRouteServer) Recv() (*Point, error) {/* ... */}
+```
+
+#### 產生 `RouteGuideClient` interface
+
+```go
+// RouteGuideClient is the client API for RouteGuide service.
+type RouteGuideClient interface {
+	// A client-to-server streaming RPC
+	// RouteGuide_RecordRouteClient 是 interface
+  RecordRoute(ctx context.Context, opts ...grpc.CallOption) (RouteGuide_RecordRouteClient, error)
+}
+
+type RouteGuide_RecordRouteClient interface {
+	Send(*Point) error
+	CloseAndRecv() (*RouteSummary, error)
+	grpc.ClientStream
+}
+
+type routeGuideRecordRouteClient struct {
+	grpc.ClientStream
+}
+func (x *routeGuideRecordRouteClient) Send(m *Point) error {/* ... */}
+func (x *routeGuideRecordRouteClient) CloseAndRecv() (*RouteSummary, error) {/* ... */}
+```
+
+### 3. 建立 server
+
+- 透過 `stream.Recv()` 接收 client 傳來的 stream
+- 透過 `stream.SendAndClose()` 回傳資料並結束
+- 根據 `error` 判斷 stream 是否已經傳完
+  - 當 `error` 為 `nil` 時，表示資料還沒傳完
+  - 當 `error` 為 `io.EOF` 時，表示資料傳送完畢
+  - 當 `error` 是其他內容時，表示有錯誤產生
+
+```go
+func (s *routeGuideServer) RecordRoute(stream pb.RouteGuide_RecordRouteServer) error {
+	var pointCount, featureCount, distance int32
+	var lastPoint *pb.Point
+	startTime := time.Now()
+
+	for {
+		// 在 server 端接收 client 傳來的 stream
+		point, err := stream.Recv()
+
+    // 當 err == io.EOF 時，表示 client 資料傳送完畢
+		if err == io.EOF {
+			endTime := time.Now()
+
+      // 透過 stream.SendAndClose() 回傳資料給 client
+			return stream.SendAndClose(&pb.RouteSummary{
+				PointCount:   pointCount,
+				FeatureCount: featureCount,
+				Distance:     distance,
+				ElapsedTime:  int32(endTime.Sub(startTime).Seconds()),
+			})
+		}
+
+		if err != nil {
+			return err
+		}
+
+		pointCount++
+		for _, feature := range s.savedFeatures {
+			if proto.Equal(feature.Location, point) {
+				featureCount++
+			}
+		}
+		if lastPoint != nil {
+			distance += calcDistance(lastPoint, point)
+		}
+	}
+}
+```
+
+### 4. 建立 client
+
+#### 建立 service method
+
+- 透過 `RouteGuideClient` 的 `RecordRoute(ctx)` 方法可以取得 `stream`
+- 使用 `err := stream.Send(point)` 可以從 client 以 stream 的方式向 server 傳送資料
+- 使用 `reply, err := stream.CloseAndRecv()` 可以告知 server 資料傳送完畢，等待接收 server 回應
+
+```go
+// client-to-server stream
+// runRecordRoute 會送一系列的 points 到 server，並從 server 取得 RouteSummary 的回應
+func runRecordRoute(client pb.RouteGuideClient) {
+	// 建立隨機 points
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	pointCount := int(r.Int31n(100)) + 2
+	var points []*pb.Point
+	for i := 0; i < pointCount; i++ {
+		points = append(points, randomPoint(r))
+	}
+	log.Printf("Traversing %d points.", len(points))
+
+	// 建立 timeout 機制
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 透過 RouteGuideClient 的 RecordRoute 方法可以取得 stream
+	stream, err := client.RecordRoute(ctx)
+
+	if err != nil {
+		log.Fatalf("%v.RecordRoute(_) = _, %v", client, err)
+	}
+
+	for _, point := range points {
+		// 透過 stream.Send 向 server 發送 stream
+		if err := stream.Send(point); err != nil {
+			log.Fatalf("%v.Send(%v) = %v", stream, point, err)
+		}
+	}
+
+	// 告知 server 傳送完畢，並準備接收 server 的回應
+	reply, err := stream.CloseAndRecv()
+	if err != nil {
+		log.Fatalf("%v.CloseAndRecv() got error %v, want %v", stream, err, nil)
+	}
+	log.Printf("Route summary: %v", reply)
+}
+```
+
+#### 執行該 method
+
+```go
+func main() {
+  // client-to-serve streaming RPC
+	// RecordRoute
+	runRecordRoute(client)
+}
+```
+
 ## Debugging
 
 > [Debugging](https://github.com/grpc/grpc-go/blob/master/examples/features/debugging/README.md) @ gPRC Github
@@ -384,7 +573,7 @@ func main() {
 將環境變數設成：
 
 ```bash
-GRPC_GO_LOG_VERBOSITY_LEVEL=99 
+GRPC_GO_LOG_VERBOSITY_LEVEL=99
 GRPC_GO_LOG_SEVERITY_LEVEL=info
 ```
 
@@ -396,4 +585,3 @@ GRPC_GO_LOG_SEVERITY_LEVEL=info
 # 需要把 $GOPATH/bin 加到 .zshrc/.bashrc 等
 $ echo 'export PATH=$PATH:$GOPATH/bin' >> $HOME/.zshrc
 ```
-
